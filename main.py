@@ -1,5 +1,6 @@
 import os
 import asyncio
+import json
 import discord
 import boto3
 import io
@@ -15,24 +16,94 @@ import pytz
 SERVER_START_TIME = None
 
 load_dotenv()
-AUTOSTOP = True
-INSTANCE_ID = os.getenv("INSTANCE_ID")
 
-AUTHORIZED_USERS = [
-    587584984097751040,
-    789495762325078078,
-    602330585654099969,
-    657618021480660993
-]
-MC_CHAT_CHANNEL = 1040949449217818727
-MC_BOT_ID = 1082588508591501343
-MC_COMMAND_CHANNEL = 1197985694128296029
-CONTROL_PANEL_CHANNEL = 1518599666734727315
-LOG_CHANNEL = 1518630213183869008
+CONFIG_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "config.json"
+)
+
+
+def validate_config(config):
+    required_keys = {
+        "autostop": {"enabled", "max_idle_ticks"},
+        "minecraft": {
+            "bot_id",
+            "chat_channel",
+            "command_channel",
+            "server_address"
+        },
+        "discord": {"control_panel_channel", "log_channel"},
+        "permissions": {"authorized_users"},
+        "timeouts": {"startup_wait_seconds", "ssm_wait_seconds"}
+    }
+
+    if not isinstance(config, dict):
+        raise ValueError("config.json must contain a JSON object.")
+
+    for section, keys in required_keys.items():
+        if section not in config:
+            raise ValueError(f"Missing required configuration section: {section}")
+        if not isinstance(config[section], dict):
+            raise ValueError(f"Configuration section '{section}' must be an object.")
+
+        missing_keys = keys - config[section].keys()
+        if missing_keys:
+            missing = ", ".join(sorted(missing_keys))
+            raise ValueError(
+                f"Missing required key(s) in configuration section "
+                f"'{section}': {missing}"
+            )
+
+    if not isinstance(config["autostop"]["enabled"], bool):
+        raise ValueError("'autostop.enabled' must be a boolean.")
+    if not isinstance(config["autostop"]["max_idle_ticks"], int):
+        raise ValueError("'autostop.max_idle_ticks' must be an integer.")
+    if not isinstance(config["minecraft"]["server_address"], str):
+        raise ValueError("'minecraft.server_address' must be a string.")
+    if not isinstance(config["permissions"]["authorized_users"], list):
+        raise ValueError("'permissions.authorized_users' must be a list.")
+
+
+def load_config():
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as file:
+            config = json.load(file)
+    except FileNotFoundError as error:
+        raise FileNotFoundError(
+            f"Configuration file not found: {CONFIG_FILE}"
+        ) from error
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"Invalid JSON in config.json at line {error.lineno}, "
+            f"column {error.colno}: {error.msg}"
+        ) from error
+    except OSError as error:
+        raise OSError(f"Unable to read config.json: {error}") from error
+
+    validate_config(config)
+    return config
+
+
+def save_config(config):
+    validate_config(config)
+    temporary_file = f"{CONFIG_FILE}.tmp"
+    with open(temporary_file, "w", encoding="utf-8") as file:
+        json.dump(config, file, indent=4)
+        file.write("\n")
+    os.replace(temporary_file, CONFIG_FILE)
+
+
+try:
+    CONFIG = load_config()
+except Exception as error:
+    print(f"❌ Configuration Error: {error}")
+    raise
+
+INSTANCE_ID = os.getenv("INSTANCE_ID")
 
 
 idle_ticks = 0
-MAX_IDLE_TICKS = 3
+DASHBOARD_REFRESH_MINUTES = 5
 starting_server = False
 stopping_server = False
 
@@ -74,13 +145,68 @@ def get_instance_status():
     )
 
 
+async def log_exception(title, error):
+    message = f"❌ {title}:\n{type(error).__name__}: {error}"
+
+    try:
+        log_channel = getattr(client, "log_channel", None)
+        if log_channel is None:
+            log_channel = await client.fetch_channel(
+                CONFIG["discord"]["log_channel"]
+            )
+        await log_channel.send(message)
+    except Exception as logging_error:
+        print(f"Failed to log exception: {logging_error!r}")
+
+
+async def wait_for_ssm_availability(timeout, poll_interval=5):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return False
+
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ssm.describe_instance_information,
+                    Filters=[
+                        {
+                            "Key": "InstanceIds",
+                            "Values": [INSTANCE_ID]
+                        }
+                    ]
+                ),
+                timeout=remaining
+            )
+        except asyncio.TimeoutError:
+            return False
+
+        if any(
+            instance.get("InstanceId") == INSTANCE_ID
+            and instance.get("PingStatus") == "Online"
+            for instance in response.get("InstanceInformationList", [])
+        ):
+            return True
+
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return False
+
+        await asyncio.sleep(min(poll_interval, remaining))
+
+
 panel_message = None
 
 
 def get_minecraft_info():
 
     try:
-        server = JavaServer.lookup("13.205.205.48:31121")
+        server = JavaServer.lookup(
+            CONFIG["minecraft"]["server_address"]
+        )
         status = server.status()
 
         return {
@@ -145,14 +271,21 @@ def create_status_embed(guild):
     )
 
     # ---------------- MINECRAFT STATUS ----------------
-    mc = guild.get_member(MC_BOT_ID)
+    mc = guild.get_member(CONFIG["minecraft"]["bot_id"])
 
     mc_status = (
         "🟢 Online"
         if mc and str(mc.status) == "online"
         else "🔴 Offline"
     )
-    autostop_text = "🟢 Active" if AUTOSTOP else "🔴 Inactive"
+    autostop_enabled = CONFIG["autostop"]["enabled"]
+    autostop_text = "🟢 Active" if autostop_enabled else "🔴 Inactive"
+    if autostop_enabled:
+        autostop_duration = (
+            CONFIG["autostop"]["max_idle_ticks"]
+            * DASHBOARD_REFRESH_MINUTES
+        )
+        autostop_text = f"🟢 Active ({autostop_duration} min)"
     # ---------------- EMBED ----------------
     embed = discord.Embed(
         title = "Minecraft Server Control Panel",
@@ -166,11 +299,15 @@ def create_status_embed(guild):
         #     f"⏱️ Uptime\n"
         #     f"└─ {uptime}\n\n"
         #     f"🔀 Auto-Stop\n"
-        #     f"└─ {AUTOSTOP}"
+        #     f"└─ {CONFIG['autostop']['enabled']}"
         # ),
-        color=discord.Color.green()
-        if ec2_state == "running"
-        else discord.Color.red(),
+        color=(
+            discord.Color.green()
+            if ec2_state == "running"
+            else discord.Color.yellow()
+            if ec2_state in ["pending", "stopping"]
+            else discord.Color.red()
+        ),
             
     )
 
@@ -258,8 +395,10 @@ async def start_minecraft_server(guild):
 
     try:
         await update_operation_buttons()
-        log_channel = await client.fetch_channel(LOG_CHANNEL)
-        mc = guild.get_member(MC_BOT_ID)
+        log_channel = await client.fetch_channel(
+            CONFIG["discord"]["log_channel"]
+        )
+        mc = guild.get_member(CONFIG["minecraft"]["bot_id"])
 
         if mc and str(mc.status) == "online":
             return "already_running"
@@ -273,11 +412,34 @@ async def start_minecraft_server(guild):
             )
 
             waiter = ec2.get_waiter("instance_running")
-            await asyncio.to_thread(
-                waiter.wait,
-                InstanceIds=[INSTANCE_ID]
-            )
+            startup_timeout = CONFIG["timeouts"]["startup_wait_seconds"]
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        waiter.wait,
+                        InstanceIds=[INSTANCE_ID]
+                    ),
+                    timeout=startup_timeout
+                )
+            except asyncio.TimeoutError:
+                await log_channel.send(
+                    f"❌ AWS startup timed out after {startup_timeout} seconds "
+                    "while waiting "
+                    "for the instance to reach the running state."
+                )
+                return "aws_timeout"
+
             await log_channel.send("✅ AWS instance reached running state.")
+
+        ssm_timeout = CONFIG["timeouts"]["ssm_wait_seconds"]
+        ssm_available = await wait_for_ssm_availability(ssm_timeout)
+        if not ssm_available:
+            await log_channel.send(
+                f"❌ SSM did not become available within {ssm_timeout} seconds."
+            )
+            return "ssm_timeout"
+
+        await log_channel.send("✅ SSM is online and available.")
 
         ssm.send_command(
             InstanceIds=[INSTANCE_ID],
@@ -294,7 +456,7 @@ async def start_minecraft_server(guild):
 
         try:
             def check(msg):
-                return msg.channel.id == MC_CHAT_CHANNEL and msg.author.id == MC_BOT_ID and "server has started" in msg.content.lower()
+                return msg.channel.id == CONFIG["minecraft"]["chat_channel"] and msg.author.id == CONFIG["minecraft"]["bot_id"] and "server has started" in msg.content.lower()
 
             await client.wait_for(
                 "message",
@@ -307,6 +469,9 @@ async def start_minecraft_server(guild):
         except asyncio.TimeoutError:
             await log_channel.send("The server either failed to start in 100 seconds or is taking too long. Contact an admin or check the logs for the error.")
             return "timeout"
+    except Exception as e:
+        await log_exception("Startup Error", e)
+        raise
     finally:
         starting_server = False
         await update_operation_buttons()
@@ -324,17 +489,21 @@ async def stop_minecraft_server(guild):
 
     try:
         await update_operation_buttons()
-        log_channel = await client.fetch_channel(LOG_CHANNEL)
+        log_channel = await client.fetch_channel(
+            CONFIG["discord"]["log_channel"]
+        )
 
         if get_instance_status() != "running":
             return "already_off"
 
         await log_channel.send("🛑 Server stop initiated.")
-        mc = guild.get_member(MC_BOT_ID)
+        mc = guild.get_member(CONFIG["minecraft"]["bot_id"])
 
         if mc and str(mc.status) == "online":
 
-            channel = guild.get_channel(MC_COMMAND_CHANNEL)
+            channel = guild.get_channel(
+                CONFIG["minecraft"]["command_channel"]
+            )
 
             if channel:
                 await channel.send("stop")
@@ -345,6 +514,9 @@ async def stop_minecraft_server(guild):
         ec2.stop_instances(InstanceIds=[INSTANCE_ID])
         await log_channel.send("Instance has been stopped.")
         return "stopped"
+    except Exception as e:
+        await log_exception("Shutdown Error", e)
+        raise
     finally:
         stopping_server = False
         await update_operation_buttons()
@@ -357,7 +529,7 @@ class ControlView(discord.ui.View):
 
     def set_operation_buttons_disabled(self, disabled):
         for item in self.children:
-            if item.custom_id in {"aws_start", "aws_stop"}:
+            if item.custom_id in {"aws_start", "aws_stop", "toggle_autostop"}:
                 item.disabled = disabled
 
     # ======================================================
@@ -381,6 +553,7 @@ class ControlView(discord.ui.View):
                 ephemeral=True
             )
 
+        await client.log_channel.send(f"{interaction.user} issued command: Start")
         await interaction.response.defer(ephemeral=True)
 
         try:
@@ -419,6 +592,18 @@ class ControlView(discord.ui.View):
                     ephemeral=True
                 )
 
+            elif result == "aws_timeout":
+                await interaction.followup.send(
+                    "❌ AWS instance startup timed out.",
+                    ephemeral=True
+                )
+
+            elif result == "ssm_timeout":
+                await interaction.followup.send(
+                    "❌ AWS instance is running, but SSM did not become available.",
+                    ephemeral=True
+                )
+
             else:
                 await interaction.followup.send(
                     "🚀 Start request sent.",
@@ -447,13 +632,13 @@ class ControlView(discord.ui.View):
         button: discord.ui.Button
     ):
         
-        await client.log_channel.send(f"{interaction.user} issued command: Stop")
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message(
                 "❌ Administrator permissions required.",
                 ephemeral=True
             )
 
+        await client.log_channel.send(f"{interaction.user} issued command: Stop")
         await interaction.response.defer(ephemeral=True)
 
         try:
@@ -507,13 +692,19 @@ class ControlView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message(
+                "❌ Administrator permissions required.",
+                ephemeral=True
+            )
+
+        await client.log_channel.send(f"{interaction.user} issued command: Refresh")
         await refresh_panel(interaction, self)
         await interaction.response.send_message(
             "🔄 Updated dashboard.",
             ephemeral=True
         )
 
-        await client.log_channel.send(f"{interaction.user} issued command: Refresh")
     @discord.ui.button(
         label="🔀 Toggle AutoStop",
         style=discord.ButtonStyle.blurple,
@@ -524,16 +715,28 @@ class ControlView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-        await client.log_channel.send(f"{interaction.user} issued command: Toggle")
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message(
                 "❌ Administrator permissions required.",
                 ephemeral=True
             )
-        global AUTOSTOP
-        AUTOSTOP = not AUTOSTOP
+
+        await client.log_channel.send(f"{interaction.user} issued command: Toggle")
+        previous_autostop_state = CONFIG["autostop"]["enabled"]
+        CONFIG["autostop"]["enabled"] = not previous_autostop_state
+
+        try:
+            await asyncio.to_thread(save_config, CONFIG)
+        except Exception as e:
+            CONFIG["autostop"]["enabled"] = previous_autostop_state
+            await log_exception("Auto-Stop Save Error", e)
+            return await interaction.response.send_message(
+                "❌ Failed to save the Auto-Stop setting.",
+                ephemeral=True
+            )
+
         await interaction.response.send_message(
-            f"🔄 Set autostop to {AUTOSTOP}",
+            f"🔄 Set autostop to {CONFIG['autostop']['enabled']}",
             ephemeral=True
         )
         await refresh_panel(interaction, self)
@@ -546,7 +749,7 @@ control_view = None
 )
 async def start_server(ctx):
 
-    if ctx.author.id not in AUTHORIZED_USERS:
+    if ctx.author.id not in CONFIG["permissions"]["authorized_users"]:
         ctx.command.reset_cooldown(ctx)
 
         return await ctx.send("Not authorized.")
@@ -561,7 +764,7 @@ async def start_server(ctx):
 @client.command(name="stop")
 async def stop_server(ctx):
 
-    if ctx.author.id not in AUTHORIZED_USERS:
+    if ctx.author.id not in CONFIG["permissions"]["authorized_users"]:
         return await ctx.send("Not authorized.")
 
     result = await stop_minecraft_server(
@@ -587,7 +790,7 @@ async def setup(ctx):
         control_view = ControlView()
 
     channel = ctx.guild.get_channel(
-        CONTROL_PANEL_CHANNEL
+        CONFIG["discord"]["control_panel_channel"]
     )
 
     panel_message = await channel.send(
@@ -599,7 +802,10 @@ async def setup(ctx):
 @client.event
 async def on_ready():
     global control_view
-    client.log_channel = await client.fetch_channel(LOG_CHANNEL)
+    client.log_channel = await client.fetch_channel(
+        CONFIG["discord"]["log_channel"]
+    )
+
     if control_view is None:
         control_view = ControlView()
     client.add_view(control_view)
@@ -611,7 +817,7 @@ async def on_ready():
 
     try:
         channel = await client.fetch_channel(
-            CONTROL_PANEL_CHANNEL
+            CONFIG["discord"]["control_panel_channel"]
         )
 
         async for msg in channel.history(limit=10):
@@ -630,7 +836,7 @@ def clean_code(content):
 
 @client.command(aliases = ['eval'])
 async def evaluate(ctx, *, arg = None):
-    if not ctx.author.id in [602330585654099969,587584984097751040,789495762325078078]:
+    if ctx.author.id not in CONFIG["permissions"]["authorized_users"][:3]:
         return
     if arg == None:
         await ctx.send('I Got Nothing To Evaluate, Bro!')
@@ -663,7 +869,7 @@ async def evaluate(ctx, *, arg = None):
     embed.add_field(name = "Result",value = result,inline= False)
     await ctx.send(embed = embed)
 
-@tasks.loop(minutes = 5)
+@tasks.loop(minutes=DASHBOARD_REFRESH_MINUTES)
 async def refresh_dashboard():
     global panel_message
     global control_view,idle_ticks
@@ -680,9 +886,8 @@ async def refresh_dashboard():
         )
 
         print("Success!")
-        global AUTOSTOP
 
-        if(AUTOSTOP):
+        if(CONFIG["autostop"]["enabled"]):
             mc_info = get_minecraft_info()
 
             if mc_info["online"]:
@@ -690,15 +895,17 @@ async def refresh_dashboard():
                     idle_ticks += 1
                     print(f"Idle ticks: {idle_ticks}")
 
-                    log_channel = panel_message.guild.get_channel(LOG_CHANNEL)
+                    log_channel = panel_message.guild.get_channel(
+                        CONFIG["discord"]["log_channel"]
+                    )
 
-                    if idle_ticks == MAX_IDLE_TICKS - 1:
+                    if idle_ticks == CONFIG["autostop"]["max_idle_ticks"] - 1:
                         await log_channel.send(
                             "⚠️ No players detected.\n"
                             "Server will shut down in approximately 5 minutes if nobody joins."
                         )
 
-                    if idle_ticks >= MAX_IDLE_TICKS:
+                    if idle_ticks >= CONFIG["autostop"]["max_idle_ticks"]:
                         await log_channel.send(
                             "🛑 Auto-shutdown triggered due to inactivity."
                         )
@@ -713,6 +920,7 @@ async def refresh_dashboard():
 
     except Exception as e:
         print("Refresh error:", repr(e))
+        await log_exception("Dashboard Refresh Error", e)
 
 
 client.run(os.getenv("TOKEN"))

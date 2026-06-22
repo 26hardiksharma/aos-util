@@ -1,0 +1,28 @@
+{
+    "autostop": {
+        "enabled": true,
+        "max_idle_ticks": 3
+    },
+    "minecraft": {
+        "bot_id": 1082588508591501343,
+        "chat_channel": 1040949449217818727,
+        "command_channel": 1197985694128296029,
+        "server_address": "13.205.205.48:31121"
+    },
+    "discord": {
+        "control_panel_channel": 1518599666734727315,
+        "log_channel": 1518630213183869008
+    },
+    "permissions": {
+        "authorized_users": [
+            587584984097751040,
+            789495762325078078,
+            602330585654099969,
+            657618021480660993
+        ]
+    },
+    "timeouts": {
+        "startup_wait_seconds": 300,
+        "ssm_wait_seconds": 60
+    }
+}
