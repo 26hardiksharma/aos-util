@@ -10,9 +10,6 @@ from discord.ext import commands
 
 load_dotenv()
 
-# ==========================================================
-# CONFIG
-# ==========================================================
 
 INSTANCE_ID = os.getenv("INSTANCE_ID")
 
@@ -28,9 +25,6 @@ MC_COMMAND_CHANNEL = 1197985694128296029
 CONTROL_PANEL_CHANNEL = 1518599666734727315
 LOG_CHANNEL = 1020949894745296896
 
-# ==========================================================
-# DISCORD SETUP
-# ==========================================================
 
 intents = discord.Intents.all()
 intents.presences = True
@@ -44,9 +38,7 @@ client = commands.Bot(
     strip_after_prefix=True
 )
 
-# ==========================================================
-# AWS CLIENTS
-# ==========================================================
+
 
 ec2 = boto3.client(
     "ec2",
@@ -61,10 +53,6 @@ ssm = boto3.client(
     aws_access_key_id=os.getenv("AWS_ACCESS_KEY"),
     aws_secret_access_key=os.getenv("AWS_SECRET_KEY")
 )
-
-# ==========================================================
-# HELPERS
-# ==========================================================
 
 def get_instance_status():
     response = ec2.describe_instances(InstanceIds=[INSTANCE_ID])
@@ -182,10 +170,6 @@ async def stop_minecraft_server(guild):
 
     return "stopped"
 
-
-# ==========================================================
-# BUTTON VIEW
-# ==========================================================
 
 class ControlView(discord.ui.View):
 
@@ -319,10 +303,6 @@ class ControlView(discord.ui.View):
         )
 
 
-# ==========================================================
-# COMMANDS
-# ==========================================================
-
 @client.command(name="start")
 @commands.cooldown(
     1,
@@ -375,10 +355,6 @@ async def setup(ctx):
         view=ControlView()
     )
 
-
-# ==========================================================
-# EVENTS
-# ==========================================================
 
 @client.event
 async def on_ready():
