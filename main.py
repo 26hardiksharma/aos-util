@@ -549,7 +549,7 @@ class ControlView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-
+        await client.log_channel.send(f"{interaction.user} issued command: Start")
         if not interaction.user.guild_permissions.administrator:
 
             return await interaction.response.send_message(
@@ -696,12 +696,15 @@ class ControlView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
+<<<<<<< Updated upstream
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message(
                 "❌ Administrator permissions required.",
                 ephemeral=True
             )
 
+=======
+>>>>>>> Stashed changes
         await client.log_channel.send(f"{interaction.user} issued command: Refresh")
         await refresh_panel(interaction, self)
         await interaction.response.send_message(
