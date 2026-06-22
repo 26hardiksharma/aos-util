@@ -15,8 +15,7 @@ import pytz
 SERVER_START_TIME = None
 
 load_dotenv()
-
-
+AUTOSTOP = True
 INSTANCE_ID = os.getenv("INSTANCE_ID")
 
 AUTHORIZED_USERS = [
@@ -167,7 +166,9 @@ def create_status_embed(guild):
             f"📡 Ping\n"
             f"└─ {ping_text}\n\n"
             f"⏱️ Uptime\n"
-            f"└─ {uptime}"
+            f"└─ {uptime}\n\n"
+            f"🔀 Auto-Stop\n"
+            f"└─ {AUTOSTOP}"
         ),
         color=discord.Color.green()
         if ec2_state == "running"
@@ -482,7 +483,28 @@ class ControlView(discord.ui.View):
         )
 
         await client.log_channel.send(f"{interaction.user} issued command: Refresh")
-
+    @discord.ui.button(
+        label="🔀 Toggle AutoStop",
+        style=discord.ButtonStyle.blurple,
+        custom_id="toggle_autostop"
+    )
+    async def toggle_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        await client.log_channel.send(f"{interaction.user} issued command: Toggle")
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message(
+                "❌ Administrator permissions required.",
+                ephemeral=True
+            )
+        AUTOSTOP = not AUTOSTOP
+        await interaction.response.send_message(
+            f"🔄 Set autostop to {AUTOSTOP}",
+            ephemeral=True
+        )
+        await refresh_panel(interaction, self)
 control_view = None
 @client.command(name="start")
 @commands.cooldown(
