@@ -105,11 +105,11 @@ def create_status_embed(guild):
         player_text = (
             f"🟢 {mc_info['players']}/{mc_info['max_players']} players"
         )
-        ping_text = f"{mc_info['latency']} ms"
+        ping_text = f"🟢 {mc_info['latency']} ms"
 
     else:
         player_text = "🔴 Offline"
-        ping_text = "N/A"
+        ping_text = "🔴 N/A"
 
 
     ist = pytz.timezone("Asia/Kolkata")
