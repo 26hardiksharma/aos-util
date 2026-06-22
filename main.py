@@ -34,6 +34,8 @@ LOG_CHANNEL = 1518630213183869008
 
 idle_ticks = 0
 MAX_IDLE_TICKS = 3
+starting_server = False
+stopping_server = False
 
 intents = discord.Intents.all()
 intents.presences = True
@@ -104,9 +106,11 @@ def create_status_embed(guild):
         player_text = (
             f"🟢 {mc_info['players']}/{mc_info['max_players']} players"
         )
+        ping_text = f"{mc_info['latency']} ms"
 
     else:
         player_text = "🔴 Offline"
+        ping_text = "N/A"
 
 
     ist = pytz.timezone("Asia/Kolkata")
@@ -128,7 +132,7 @@ def create_status_embed(guild):
         hours, rem = divmod(delta.seconds, 3600)
         minutes, sec = divmod(rem, 60)
         uptime = (
-            f"🟢 {days}d {hours}h {minutes} {sec}sm"
+            f"🟢 {days}d {hours}h {minutes}m {sec}s"
             if days
             else f"🟢 {hours}h {minutes}m {sec}s"
         )
@@ -160,6 +164,8 @@ def create_status_embed(guild):
             f"└─ {mc_status}\n\n"
             f"👥 Players\n"
             f"└─ {player_text}\n\n"
+            f"📡 Ping\n"
+            f"└─ {ping_text}\n\n"
             f"⏱️ Uptime\n"
             f"└─ {uptime}"
         ),
@@ -194,81 +200,133 @@ async def refresh_panel(interaction, view):
     except:
         return None
 
+
+async def update_operation_buttons():
+    if control_view is None:
+        return
+
+    operations_running = starting_server or stopping_server
+    control_view.set_operation_buttons_disabled(operations_running)
+
+    if panel_message:
+        try:
+            await panel_message.edit(view=control_view)
+        except (discord.HTTPException, discord.NotFound):
+            pass
+
 async def start_minecraft_server(guild):
-    log_channel = await client.fetch_channel(LOG_CHANNEL)
-    mc = guild.get_member(MC_BOT_ID)
+    global starting_server
 
-    if mc and str(mc.status) == "online":
-        return "already_running"
+    if starting_server:
+        return "already_starting"
+    if stopping_server:
+        return "already_stopping"
 
-    instance_active = get_instance_status() == "running"
-
-    if not instance_active:
-        ec2.start_instances(
-            InstanceIds=[INSTANCE_ID]
-        )
-
-        log_channel = await client.fetch_channel(LOG_CHANNEL)
-        await log_channel.send("Instance started. Starting the minecraft server in 30 seconds.")
-        await asyncio.sleep(30)
-
-    ssm.send_command(
-        InstanceIds=[INSTANCE_ID],
-        DocumentName="AWS-RunShellScript",
-        Parameters={
-            "commands": [
-                "cd /home/ubuntu/minecraft && ./start.sh"
-            ]
-        }
-    )
-
-    if not mc:
-        return "started"
+    starting_server = True
 
     try:
-        def check(msg):
-            return msg.channel.id == MC_CHAT_CHANNEL and msg.author.id == MC_BOT_ID and "server has started" in msg.content.lower()
+        await update_operation_buttons()
+        log_channel = await client.fetch_channel(LOG_CHANNEL)
+        mc = guild.get_member(MC_BOT_ID)
 
-        await client.wait_for(
-            "message",
-            check=check,
-            timeout=100
+        if mc and str(mc.status) == "online":
+            return "already_running"
+
+        await log_channel.send("🚀 Server start initiated.")
+        instance_active = get_instance_status() == "running"
+
+        if not instance_active:
+            ec2.start_instances(
+                InstanceIds=[INSTANCE_ID]
+            )
+
+            waiter = ec2.get_waiter("instance_running")
+            await asyncio.to_thread(
+                waiter.wait,
+                InstanceIds=[INSTANCE_ID]
+            )
+            await log_channel.send("✅ AWS instance reached running state.")
+
+        ssm.send_command(
+            InstanceIds=[INSTANCE_ID],
+            DocumentName="AWS-RunShellScript",
+            Parameters={
+                "commands": [
+                    "cd /home/ubuntu/minecraft && ./start.sh"
+                ]
+            }
         )
-        await log_channel.send("Minecraft server has been started.")
-        return "online"
 
-    except asyncio.TimeoutError:
-        await log_channel.send("The server either failed to start in 100 seconds or is taking too long. Contact an admin or check the logs for the error.")
-        return "timeout"
+        if not mc:
+            return "started"
+
+        try:
+            def check(msg):
+                return msg.channel.id == MC_CHAT_CHANNEL and msg.author.id == MC_BOT_ID and "server has started" in msg.content.lower()
+
+            await client.wait_for(
+                "message",
+                check=check,
+                timeout=100
+            )
+            await log_channel.send("✅ Minecraft startup confirmed.")
+            return "online"
+
+        except asyncio.TimeoutError:
+            await log_channel.send("The server either failed to start in 100 seconds or is taking too long. Contact an admin or check the logs for the error.")
+            return "timeout"
+    finally:
+        starting_server = False
+        await update_operation_buttons()
 
 
 async def stop_minecraft_server(guild):
-    log_channel = await client.fetch_channel(LOG_CHANNEL)
-    if get_instance_status() != "running":
-        return "already_off"
+    global stopping_server
 
-    mc = guild.get_member(MC_BOT_ID)
+    if stopping_server:
+        return "already_stopping"
+    if starting_server:
+        return "already_starting"
 
-    if mc and str(mc.status) == "online":
+    stopping_server = True
 
-        channel = guild.get_channel(MC_COMMAND_CHANNEL)
+    try:
+        await update_operation_buttons()
+        log_channel = await client.fetch_channel(LOG_CHANNEL)
 
-        if channel:
-            await channel.send("stop")
-            await log_channel.send("Stopped the Minecraft Server. Waiting for 120 seconds before stopping the instance.")
+        if get_instance_status() != "running":
+            return "already_off"
 
-        await asyncio.sleep(120)
+        await log_channel.send("🛑 Server stop initiated.")
+        mc = guild.get_member(MC_BOT_ID)
 
-    ec2.stop_instances(InstanceIds=[INSTANCE_ID])
-    log_channel = await client.fetch_channel(LOG_CHANNEL)
-    await log_channel.send("Instance has been stopped.")
-    return "stopped"
+        if mc and str(mc.status) == "online":
+
+            channel = guild.get_channel(MC_COMMAND_CHANNEL)
+
+            if channel:
+                await channel.send("stop")
+                await log_channel.send("Stopped the Minecraft Server. Waiting for 120 seconds before stopping the instance.")
+
+            await asyncio.sleep(120)
+
+        ec2.stop_instances(InstanceIds=[INSTANCE_ID])
+        await log_channel.send("Instance has been stopped.")
+        return "stopped"
+    finally:
+        stopping_server = False
+        await update_operation_buttons()
 
 
 class ControlView(discord.ui.View):
 
     def __init__(self):
         super().__init__(timeout=None)
+
+    def set_operation_buttons_disabled(self, disabled):
+        for item in self.children:
+            if item.custom_id in {"aws_start", "aws_stop"}:
+                item.disabled = disabled
 
     # ======================================================
     # START BUTTON
@@ -301,6 +359,18 @@ class ControlView(discord.ui.View):
             if result == "already_running":
                 await interaction.followup.send(
                     "✅ Server is already running.",
+                    ephemeral=True
+                )
+
+            elif result == "already_starting":
+                await interaction.followup.send(
+                    "⏳ Server startup is already in progress.",
+                    ephemeral=True
+                )
+
+            elif result == "already_stopping":
+                await interaction.followup.send(
+                    "⏳ Server shutdown is already in progress.",
                     ephemeral=True
                 )
 
@@ -361,6 +431,18 @@ class ControlView(discord.ui.View):
             if result == "already_off":
                 await interaction.followup.send(
                     "⚠️ Server is already stopped.",
+                    ephemeral=True
+                )
+
+            elif result == "already_stopping":
+                await interaction.followup.send(
+                    "⏳ Server shutdown is already in progress.",
+                    ephemeral=True
+                )
+
+            elif result == "already_starting":
+                await interaction.followup.send(
+                    "⏳ Server startup is already in progress.",
                     ephemeral=True
                 )
 
@@ -546,23 +628,31 @@ async def refresh_dashboard():
 
         mc_info = get_minecraft_info()
 
-        if mc_info["online"] and mc_info["players"] == 0:
-            idle_ticks += 1
-            print(f"Idle ticks: {idle_ticks}")
-        
-        else:
-            idle_ticks = 0  # reset if players join or server offline
+        if mc_info["online"]:
+            if mc_info["players"] == 0:
+                idle_ticks += 1
+                print(f"Idle ticks: {idle_ticks}")
 
-        if idle_ticks >= MAX_IDLE_TICKS:
-            log_channel = panel_message.guild.get_channel(LOG_CHANNEL)
-            await log_channel.send("No players detected. Shutting down server")
+                log_channel = panel_message.guild.get_channel(LOG_CHANNEL)
 
-            # reset counter so it doesn't spam shutdown
-            idle_ticks = 0
+                if idle_ticks == MAX_IDLE_TICKS - 1:
+                    await log_channel.send(
+                        "⚠️ No players detected.\n"
+                        "Server will shut down in approximately 5 minutes if nobody joins."
+                    )
 
-            # shutdown EC2
+                if idle_ticks >= MAX_IDLE_TICKS:
+                    await log_channel.send(
+                        "🛑 Auto-shutdown triggered due to inactivity."
+                    )
 
-            await stop_minecraft_server(panel_message.guild)
+                    # Reset before stopping so another refresh cannot duplicate it.
+                    idle_ticks = 0
+                    await stop_minecraft_server(panel_message.guild)
+            else:
+                idle_ticks = 0  # reset if players join
+        # If mcstatus cannot confirm the server is online, preserve the current
+        # counter and skip idle evaluation for this refresh cycle.
 
     except Exception as e:
         print("Refresh error:", repr(e))
