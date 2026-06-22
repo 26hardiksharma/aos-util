@@ -285,6 +285,7 @@ class ControlView(discord.ui.View):
     ):
 
         if not interaction.user.guild_permissions.administrator:
+
             return await interaction.response.send_message(
                 "❌ Administrator permissions required.",
                 ephemeral=True
@@ -343,7 +344,8 @@ class ControlView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-
+        
+        await client.log_channel.send(f"{interaction.user} issued command: Stop")
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message(
                 "❌ Administrator permissions required.",
@@ -396,6 +398,8 @@ class ControlView(discord.ui.View):
             "🔄 Updated dashboard.",
             ephemeral=True
         )
+
+        await client.log_channel.send(f"{interaction.user} issued command: Refresh")
 
 control_view = None
 @client.command(name="start")
@@ -459,7 +463,7 @@ async def setup(ctx):
 @client.event
 async def on_ready():
     global control_view
-
+    client.log_channel = await client.fetch_channel(LOG_CHANNEL)
     if control_view is None:
         control_view = ControlView()
     client.add_view(control_view)
@@ -481,10 +485,7 @@ async def on_ready():
 
     except Exception:
         pass
-    log_channel = await client.fetch_channel(LOG_CHANNEL)
-    await log_channel.send(f"Logged in as {client.user}")
-
-
+    await client.log_channel.send(f"Logged in as {client.user}")
 def clean_code(content):
     if content.startswith("```") and content.endswith("```"):
         return "\n".join(content.split("\n")[1:])[:-3]
