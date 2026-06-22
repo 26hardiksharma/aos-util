@@ -14,7 +14,7 @@ load_dotenv()
 # CONFIG
 # ==========================================================
 
-INSTANCE_ID = "i-054fc6ad1aec4fd94"
+INSTANCE_ID = os.getenv("INSTANCE_ID")
 
 AUTHORIZED_USERS = [
     587584984097751040,
