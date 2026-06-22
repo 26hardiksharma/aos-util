@@ -159,7 +159,7 @@ async def log_exception(title, error):
         print(f"Failed to log exception: {logging_error!r}")
 
 
-async def wait_for_ssm_availability(timeout, poll_interval=5):
+async def wait_for_ssm(instance_id, timeout=60):
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
 
@@ -171,13 +171,7 @@ async def wait_for_ssm_availability(timeout, poll_interval=5):
         try:
             response = await asyncio.wait_for(
                 asyncio.to_thread(
-                    ssm.describe_instance_information,
-                    Filters=[
-                        {
-                            "Key": "InstanceIds",
-                            "Values": [INSTANCE_ID]
-                        }
-                    ]
+                    ssm.describe_instance_information
                 ),
                 timeout=remaining
             )
@@ -185,7 +179,7 @@ async def wait_for_ssm_availability(timeout, poll_interval=5):
             return False
 
         if any(
-            instance.get("InstanceId") == INSTANCE_ID
+            instance.get("InstanceId") == instance_id
             and instance.get("PingStatus") == "Online"
             for instance in response.get("InstanceInformationList", [])
         ):
@@ -195,7 +189,7 @@ async def wait_for_ssm_availability(timeout, poll_interval=5):
         if remaining <= 0:
             return False
 
-        await asyncio.sleep(min(poll_interval, remaining))
+        await asyncio.sleep(min(5, remaining))
 
 
 panel_message = None
@@ -432,24 +426,34 @@ async def start_minecraft_server(guild):
             await log_channel.send("✅ AWS instance reached running state.")
 
         ssm_timeout = CONFIG["timeouts"]["ssm_wait_seconds"]
-        ssm_available = await wait_for_ssm_availability(ssm_timeout)
-        if not ssm_available:
+        await log_channel.send("⏳ Waiting for SSM agent...")
+        ssm_ready = await wait_for_ssm(
+            INSTANCE_ID,
+            timeout=ssm_timeout
+        )
+        if not ssm_ready:
             await log_channel.send(
-                f"❌ SSM did not become available within {ssm_timeout} seconds."
+                "❌ SSM agent did not become ready within timeout."
             )
             return "ssm_timeout"
 
-        await log_channel.send("✅ SSM is online and available.")
+        await log_channel.send("✅ SSM agent is online.")
 
-        ssm.send_command(
-            InstanceIds=[INSTANCE_ID],
-            DocumentName="AWS-RunShellScript",
-            Parameters={
-                "commands": [
-                    "cd /home/ubuntu/minecraft && ./start.sh"
-                ]
-            }
-        )
+        try:
+            ssm.send_command(
+                InstanceIds=[INSTANCE_ID],
+                DocumentName="AWS-RunShellScript",
+                Parameters={
+                    "commands": [
+                        "cd /home/ubuntu/minecraft && ./start.sh"
+                    ]
+                }
+            )
+        except Exception as e:
+            await log_channel.send(
+                f"❌ SSM SendCommand Error:\n{e}"
+            )
+            raise
 
         if not mc:
             return "started"
@@ -600,7 +604,7 @@ class ControlView(discord.ui.View):
 
             elif result == "ssm_timeout":
                 await interaction.followup.send(
-                    "❌ AWS instance is running, but SSM did not become available.",
+                    "❌ EC2 started but SSM agent never became ready.",
                     ephemeral=True
                 )
 
