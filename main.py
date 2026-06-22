@@ -8,9 +8,10 @@ import textwrap
 from dotenv import load_dotenv
 from discord.ext import commands
 from mcstatus import JavaServer
-from datetime import datetime
 import pytz
-
+from discord.ext import tasks
+from datetime import datetime, timezone
+import pytz
 SERVER_START_TIME = None
 
 load_dotenv()
@@ -69,12 +70,29 @@ def get_instance_status():
     )
 
 
-from datetime import datetime
-import pytz
+panel_message = None
 
 
-from datetime import datetime, timezone
-import pytz
+def get_minecraft_info():
+
+    try:
+        server = JavaServer.lookup("13.205.205.48:31121")
+        status = server.status()
+
+        return {
+            "online": True,
+            "players": status.players.online,
+            "max_players": status.players.max,
+            "latency": round(status.latency)
+        }
+
+    except Exception:
+        return {
+            "online": False,
+            "players": 0,
+            "max_players": 0,
+            "latency": 0
+        }
 
 def create_status_embed(guild):
 
@@ -106,12 +124,11 @@ def create_status_embed(guild):
 
         days = delta.days
         hours, rem = divmod(delta.seconds, 3600)
-        minutes, _ = divmod(rem, 60)
-
+        minutes, sec = divmod(rem, 60)
         uptime = (
-            f"{days}d {hours}h {minutes}m"
+            f"{days}d {hours}h {minutes} {sec}sm"
             if days
-            else f"{hours}h {minutes}m"
+            else f"{hours}h {minutes}m {sec}s"
         )
     else:
         uptime = "N/A"
@@ -139,11 +156,10 @@ def create_status_embed(guild):
             f"└─ {ec2_status}\n\n"
             f"⛏️ **Minecraft Server**\n"
             f"└─ {mc_status}\n\n"
-            f"━━━━━━━━━━━━━━\n\n"
-            f"Last Updated:\n"
-            f"{now.strftime('%Y-%m-%d %H:%M IST')}\n\n"
-            f"Uptime:\n"
-            f"{uptime}"
+            f"👥 Players\n"
+            f"└─ {player_text}\n\n"
+            f"⏱️ Uptime\n"
+            f"└─ 🟢 {uptime}"
         ),
         color=discord.Color.green()
         if ec2_state == "running"
@@ -151,12 +167,17 @@ def create_status_embed(guild):
         
     )
     embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1020949894745296896/1518610514563829871/ouTmySN.png?ex=6a3a8bc1&is=6a393a41&hm=8da330acc56ad99f708139b93f4e62dbe9d075bbc6b5f31ffc574d39f4ee9f41&")
-    embed.add_field(
-        name="👥 Players",
-        value=player_text,
-        inline=True
-    )
-
+    # embed.add_field(
+    #     name="👥 Players",
+    #     value=player_text,
+    #     inline=True
+    # )
+    # embed.add_field(
+    #     name="⏱️ Uptime",
+    #     value = f"{uptime}",
+    #     inline=False
+    # )
+    embed.set_footer(text=f"Last Updated: {now.strftime('%Y-%m-%d %H:%M:%S IST')}")
     return embed
 
 
@@ -170,13 +191,7 @@ async def refresh_panel(interaction, view):
             view=view
         )
     except:
-        msg = await channel.send(
-            embed=create_status_embed(interaction.guild),
-            view=view
-        )
-
-        return msg
-
+        return None
 async def start_minecraft_server(guild):
 
     mc = guild.get_member(MC_BOT_ID)
@@ -244,26 +259,6 @@ async def stop_minecraft_server(guild):
     return "stopped"
 
 
-def get_minecraft_info():
-
-    try:
-        server = JavaServer.lookup("13.205.205.48:31121")
-        status = server.status()
-
-        return {
-            "online": True,
-            "players": status.players.online,
-            "max_players": status.players.max,
-            "latency": round(status.latency)
-        }
-
-    except Exception:
-        return {
-            "online": False,
-            "players": 0,
-            "max_players": 0,
-            "latency": 0
-        }
 class ControlView(discord.ui.View):
 
     def __init__(self):
@@ -273,7 +268,7 @@ class ControlView(discord.ui.View):
     # START BUTTON
     # ======================================================
     @discord.ui.button(
-        label="Start Server",
+        label="🟢 Start Server",
         style=discord.ButtonStyle.green,
         custom_id="aws_start"
     )
@@ -333,7 +328,7 @@ class ControlView(discord.ui.View):
     # STOP BUTTON
     # ======================================================
     @discord.ui.button(
-        label="Stop Server",
+        label="🔴 Stop Server",
         style=discord.ButtonStyle.red,
         custom_id="aws_stop"
     )
@@ -381,7 +376,7 @@ class ControlView(discord.ui.View):
     # REFRESH BUTTON
     # ======================================================
     @discord.ui.button(
-        label="Refresh",
+        label="🔄 Refresh",
         style=discord.ButtonStyle.blurple,
         custom_id="aws_refresh"
     )
@@ -398,6 +393,7 @@ class ControlView(discord.ui.View):
             ephemeral=True
         )
 
+control_view = None
 @client.command(name="start")
 @commands.cooldown(
     1,
@@ -440,30 +436,44 @@ async def status(ctx):
 
 @client.command()
 async def setup(ctx):
+    global panel_message
+    global control_view
+
+    if control_view is None:
+        control_view = ControlView()
 
     channel = ctx.guild.get_channel(
         CONTROL_PANEL_CHANNEL
     )
 
-    await channel.send(
+    panel_message = await channel.send(
         embed=create_status_embed(ctx.guild),
-        view=ControlView()
+        view=control_view
     )
 
 
 @client.event
 async def on_ready():
+    global control_view
 
-    client.add_view(ControlView())
+    if control_view is None:
+        control_view = ControlView()
+    client.add_view(control_view)
+    
+    if not refresh_dashboard.is_running():
+        refresh_dashboard.start()
+
+    global panel_message
 
     try:
         channel = await client.fetch_channel(
             LOG_CHANNEL
         )
 
-        await channel.send(
-            "Logged in."
-        )
+        async for msg in channel.history(limit=10):
+            if msg.author.id == client.user.id and msg.embeds:
+                panel_message = msg
+                break
 
     except Exception:
         pass
@@ -509,4 +519,27 @@ async def evaluate(ctx, *, arg = None):
   embed.add_field(name = "Command",value = f"{arg}")
   embed.add_field(name = "Result",value = result,inline= False)
   await ctx.send(embed = embed)
+
+@tasks.loop(minutes = 5)
+async def refresh_dashboard():
+
+    global panel_message
+    global control_view
+    if not panel_message or not control_view:
+        return
+    
+
+    try:
+        guild = panel_message.guild
+
+        await panel_message.edit(
+            embed=create_status_embed(guild),
+            view=control_view
+        )
+
+        print("Success!")
+
+    except Exception as e:
+        print(f"Refresh error: {e}")
+
 client.run(os.getenv("TOKEN"))
