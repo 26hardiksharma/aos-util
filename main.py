@@ -522,7 +522,7 @@ async def evaluate(ctx, *, arg = None):
   embed.add_field(name = "Result",value = result,inline= False)
   await ctx.send(embed = embed)
 
-@tasks.loop(minutes = 1)
+@tasks.loop(minutes = 5)
 async def refresh_dashboard():
 
     global panel_message
