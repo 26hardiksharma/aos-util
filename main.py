@@ -152,29 +152,60 @@ def create_status_embed(guild):
         if mc and str(mc.status) == "online"
         else "🔴 Offline"
     )
-
+    autostop_text = "🟢 Active" if AUTOSTOP else "🔴 Inactive"
     # ---------------- EMBED ----------------
     embed = discord.Embed(
         title = "Minecraft Server Control Panel",
-        description=(
-            f"🖥️ **EC2 Instance**\n"
-            f"└─ {ec2_status}\n\n"
-            f"⛏️ **Minecraft Server**\n"
-            f"└─ {mc_status}\n\n"
-            f"👥 Players\n"
-            f"└─ {player_text}\n\n"
-            f"📡 Ping\n"
-            f"└─ {ping_text}\n\n"
-            f"⏱️ Uptime\n"
-            f"└─ {uptime}\n\n"
-            f"🔀 Auto-Stop\n"
-            f"└─ {AUTOSTOP}"
-        ),
+        # description=(
+        #     f"🖥️ **EC2 Instance**\n"
+        #     f"└─ {ec2_status}\n\n"
+        #     f"⛏️ **Minecraft Server**\n"
+        #     f"└─ {mc_status}\n\n"
+        #     f"👥 Players\n"
+        #     f"└─ {player_text}\n\n"
+        #     f"⏱️ Uptime\n"
+        #     f"└─ {uptime}\n\n"
+        #     f"🔀 Auto-Stop\n"
+        #     f"└─ {AUTOSTOP}"
+        # ),
         color=discord.Color.green()
         if ec2_state == "running"
         else discord.Color.red(),
-        
+            
     )
+
+    embed.add_field(
+            name = f"🖥️ **EC2 Instance**",
+            value = f"└─ {ec2_status}",
+            inline = True
+    )
+
+    embed.add_field(
+        name = "⛏️ **Minecraft Server**",
+        value = f"└─ {mc_status}",
+        inline = True
+    )
+
+    embed.add_field(name=f"📡 Ping", value=f"└─ {ping_text}", inline=True)
+
+    embed.add_field(
+        name = "👥 Players",
+        value = f"└─ {player_text}",
+        inline = True
+    )
+
+    embed.add_field(
+        name = "⏱️ Uptime",
+        value = f"└─ {uptime}",
+        inline = True
+    )
+
+    embed.add_field(
+        name = "🔀 Auto-Stop",
+        value = f"└─ {autostop_text}",
+        inline = True
+    )
+
     embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1020949894745296896/1518610514563829871/ouTmySN.png?ex=6a3a8bc1&is=6a393a41&hm=8da330acc56ad99f708139b93f4e62dbe9d075bbc6b5f31ffc574d39f4ee9f41&")
     # embed.add_field(
     #     name="👥 Players",
@@ -499,6 +530,7 @@ class ControlView(discord.ui.View):
                 "❌ Administrator permissions required.",
                 ephemeral=True
             )
+        global AUTOSTOP
         AUTOSTOP = not AUTOSTOP
         await interaction.response.send_message(
             f"🔄 Set autostop to {AUTOSTOP}",
@@ -648,34 +680,36 @@ async def refresh_dashboard():
         )
 
         print("Success!")
+        global AUTOSTOP
 
-        mc_info = get_minecraft_info()
+        if(AUTOSTOP):
+            mc_info = get_minecraft_info()
 
-        if mc_info["online"]:
-            if mc_info["players"] == 0:
-                idle_ticks += 1
-                print(f"Idle ticks: {idle_ticks}")
+            if mc_info["online"]:
+                if mc_info["players"] == 0:
+                    idle_ticks += 1
+                    print(f"Idle ticks: {idle_ticks}")
 
-                log_channel = panel_message.guild.get_channel(LOG_CHANNEL)
+                    log_channel = panel_message.guild.get_channel(LOG_CHANNEL)
 
-                if idle_ticks == MAX_IDLE_TICKS - 1:
-                    await log_channel.send(
-                        "⚠️ No players detected.\n"
-                        "Server will shut down in approximately 5 minutes if nobody joins."
-                    )
+                    if idle_ticks == MAX_IDLE_TICKS - 1:
+                        await log_channel.send(
+                            "⚠️ No players detected.\n"
+                            "Server will shut down in approximately 5 minutes if nobody joins."
+                        )
 
-                if idle_ticks >= MAX_IDLE_TICKS:
-                    await log_channel.send(
-                        "🛑 Auto-shutdown triggered due to inactivity."
-                    )
+                    if idle_ticks >= MAX_IDLE_TICKS:
+                        await log_channel.send(
+                            "🛑 Auto-shutdown triggered due to inactivity."
+                        )
 
-                    # Reset before stopping so another refresh cannot duplicate it.
-                    idle_ticks = 0
-                    await stop_minecraft_server(panel_message.guild)
-            else:
-                idle_ticks = 0  # reset if players join
-        # If mcstatus cannot confirm the server is online, preserve the current
-        # counter and skip idle evaluation for this refresh cycle.
+                        # Reset before stopping so another refresh cannot duplicate it.
+                        idle_ticks = 0
+                        await stop_minecraft_server(panel_message.guild)
+                else:
+                    idle_ticks = 0  # reset if players join
+            # If mcstatus cannot confirm the server is online, preserve the current
+            # counter and skip idle evaluation for this refresh cycle.
 
     except Exception as e:
         print("Refresh error:", repr(e))
