@@ -29,8 +29,11 @@ AUTHORIZED_USERS = [
 MC_BOT_ID = 1082588508591501343
 MC_COMMAND_CHANNEL = 1197985694128296029
 CONTROL_PANEL_CHANNEL = 1518599666734727315
-LOG_CHANNEL = 1020949894745296896
+LOG_CHANNEL = 1518630213183869008
 
+
+idle_ticks = 0
+MAX_IDLE_TICKS = 3
 
 intents = discord.Intents.all()
 intents.presences = True
@@ -174,7 +177,7 @@ def create_status_embed(guild):
     # )
     # embed.add_field(
     #     name="⏱️ Uptime",
-    #     value = f"{uptime}",
+    #     value = f"{uptime}"
     #     inline=False
     # )
     embed.set_footer(text=f"Last Updated: {now.strftime('%Y-%m-%d %H:%M:%S IST')}")
@@ -467,7 +470,7 @@ async def on_ready():
 
     try:
         channel = await client.fetch_channel(
-            LOG_CHANNEL
+            CONTROL_PANEL_CHANNEL
         )
 
         async for msg in channel.history(limit=10):
@@ -477,9 +480,8 @@ async def on_ready():
 
     except Exception:
         pass
-
-    print(f"Logged in as {client.user}")
-
+    log_channel = await client.fetch_channel(LOG_CHANNEL)
+    await log_channel.send(f"Logged in as {client.user}")
 def clean_code(content):
   if content.startswith("```") and content.endswith("```"):
     return "\n".join(content.split("\n")[1:])[:-3]
@@ -520,11 +522,13 @@ async def evaluate(ctx, *, arg = None):
   embed.add_field(name = "Result",value = result,inline= False)
   await ctx.send(embed = embed)
 
-@tasks.loop(minutes = 5)
+@tasks.loop(minutes = 1)
 async def refresh_dashboard():
 
     global panel_message
-    global control_view
+    global control_view,idle_ticks
+
+
     if not panel_message or not control_view:
         return
     
@@ -539,7 +543,28 @@ async def refresh_dashboard():
 
         print("Success!")
 
+        mc_info = get_minecraft_info()
+
+        if mc_info["online"] and mc_info["players"] == 0:
+            idle_ticks += 1
+            print(f"Idle ticks: {idle_ticks}")
+        
+        else:
+            idle_ticks = 0  # reset if players join or server offline
+
+        if idle_ticks >= MAX_IDLE_TICKS:
+            log_channel = panel_message.guild.get_channel(LOG_CHANNEL)
+            await log_channel.send("No players detected. Shutting down server")
+
+            # reset counter so it doesn't spam shutdown
+            idle_ticks = 0
+
+            # shutdown EC2
+
+            await stop_minecraft_server(panel_message.guild)
+
     except Exception as e:
-        print(f"Refresh error: {e}")
+        print("Refresh error:", repr(e))
+
 
 client.run(os.getenv("TOKEN"))
