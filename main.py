@@ -382,7 +382,7 @@ def clean_code(content):
     return content
 @client.command(aliases = ['eval'])
 async def evaluate(ctx, *, arg = None):
-  if not ctx.author.id == 920564227570270208:
+  if not ctx.author.id in [602330585654099969,587584984097751040,789495762325078078]:
     return
   if arg == None:
     await ctx.send('I Got Nothing To Evaluate, Bro!')
