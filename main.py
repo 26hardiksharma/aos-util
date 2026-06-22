@@ -98,7 +98,6 @@ def get_minecraft_info():
         }
 
 def create_status_embed(guild):
-
     mc_info = get_minecraft_info()
 
     if mc_info["online"]:
@@ -129,12 +128,12 @@ def create_status_embed(guild):
         hours, rem = divmod(delta.seconds, 3600)
         minutes, sec = divmod(rem, 60)
         uptime = (
-            f"{days}d {hours}h {minutes} {sec}sm"
+            f"🟢 {days}d {hours}h {minutes} {sec}sm"
             if days
-            else f"{hours}h {minutes}m {sec}s"
+            else f"🟢 {hours}h {minutes}m {sec}s"
         )
     else:
-        uptime = "N/A"
+        uptime = "🔴 N/A"
 
     ec2_status = (
         "🟢 Running" if ec2_state == "running"
@@ -162,7 +161,7 @@ def create_status_embed(guild):
             f"👥 Players\n"
             f"└─ {player_text}\n\n"
             f"⏱️ Uptime\n"
-            f"└─ 🟢 {uptime}"
+            f"└─ {uptime}"
         ),
         color=discord.Color.green()
         if ec2_state == "running"
@@ -185,7 +184,6 @@ def create_status_embed(guild):
 
 
 async def refresh_panel(interaction, view):
-
     channel = interaction.channel
 
     try:
@@ -195,6 +193,7 @@ async def refresh_panel(interaction, view):
         )
     except:
         return None
+
 async def start_minecraft_server(guild):
     log_channel = await client.fetch_channel(LOG_CHANNEL)
     mc = guild.get_member(MC_BOT_ID)
@@ -227,7 +226,6 @@ async def start_minecraft_server(guild):
         return "started"
 
     try:
-
         def check(msg):
             return msg.channel.id == MC_CHAT_CHANNEL and msg.author.id == MC_BOT_ID and "server has started" in msg.content.lower()
 
@@ -393,9 +391,7 @@ class ControlView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-
         await refresh_panel(interaction, self)
-
         await interaction.response.send_message(
             "🔄 Updated dashboard.",
             ephemeral=True
@@ -487,56 +483,56 @@ async def on_ready():
         pass
     log_channel = await client.fetch_channel(LOG_CHANNEL)
     await log_channel.send(f"Logged in as {client.user}")
+
+
 def clean_code(content):
-  if content.startswith("```") and content.endswith("```"):
-    return "\n".join(content.split("\n")[1:])[:-3]
-  else:
-    return content
+    if content.startswith("```") and content.endswith("```"):
+        return "\n".join(content.split("\n")[1:])[:-3]
+    else:
+        return content
+
 @client.command(aliases = ['eval'])
 async def evaluate(ctx, *, arg = None):
-  if not ctx.author.id in [602330585654099969,587584984097751040,789495762325078078]:
-    return
-  if arg == None:
-    await ctx.send('I Got Nothing To Evaluate, Bro!')
-    return
-  if "token" in arg.lower():
-    return await ctx.send('My Token Is Damn Secret And Cannot Be Leaked.')
-  code = clean_code(arg)
-  local_variables = {
-    "discord": discord,
-    "commands": commands,
-    "client": client,
-    "ctx": ctx,
-    "channel": ctx.channel,
-    "author": ctx.author,
-    "guild": ctx.guild,
-    "message": ctx.message,
+    if not ctx.author.id in [602330585654099969,587584984097751040,789495762325078078]:
+        return
+    if arg == None:
+        await ctx.send('I Got Nothing To Evaluate, Bro!')
+        return
+    if "token" in arg.lower():
+        return await ctx.send('My Token Is Damn Secret And Cannot Be Leaked.')
+    code = clean_code(arg)
+    local_variables = {
+        "discord": discord,
+        "commands": commands,
+        "client": client,
+        "ctx": ctx,
+        "channel": ctx.channel,
+        "author": ctx.author,
+        "guild": ctx.guild,
+        "message": ctx.message,
     }
 
-  stdout = io.StringIO()
-  try:
-    with contextlib.redirect_stdout(stdout):
-      exec(f"async def func():\n{textwrap.indent(code, '    ')}", local_variables,)
-      obj = await local_variables["func"]()
-      result = f"{stdout.getvalue()}"
-  except Exception as e:
-    kekek = f"{e}, {e}, {e.__traceback__}"
-    result = "".join(kekek)
-  embed = discord.Embed(title = "Eval",color = ctx.author.color)
-  embed.add_field(name = "Command",value = f"{arg}")
-  embed.add_field(name = "Result",value = result,inline= False)
-  await ctx.send(embed = embed)
+    stdout = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(stdout):
+            exec(f"async def func():\n{textwrap.indent(code, '    ')}", local_variables,)
+            obj = await local_variables["func"]()
+            result = f"{stdout.getvalue()}"
+    except Exception as e:
+        kekek = f"{e}, {e}, {e.__traceback__}"
+        result = "".join(kekek)
+    embed = discord.Embed(title = "Eval",color = ctx.author.color)
+    embed.add_field(name = "Command",value = f"{arg}")
+    embed.add_field(name = "Result",value = result,inline= False)
+    await ctx.send(embed = embed)
 
 @tasks.loop(minutes = 5)
 async def refresh_dashboard():
-
     global panel_message
     global control_view,idle_ticks
 
-
     if not panel_message or not control_view:
         return
-    
 
     try:
         guild = panel_message.guild
