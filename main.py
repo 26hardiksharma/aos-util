@@ -533,7 +533,7 @@ class ControlView(discord.ui.View):
 
     def set_operation_buttons_disabled(self, disabled):
         for item in self.children:
-            if item.custom_id in {"aws_start", "aws_stop", "toggle_autostop"}:
+            if item.custom_id in {"aws_start", "aws_stop", "toggle_autostop", "aws_refresh"}:
                 item.disabled = disabled
 
     # ======================================================
