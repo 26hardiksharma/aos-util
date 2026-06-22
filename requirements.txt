@@ -1,3 +1,4 @@
 discord
 boto3
 dotenv
+mcstatus

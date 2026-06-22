@@ -7,6 +7,11 @@ import contextlib
 import textwrap
 from dotenv import load_dotenv
 from discord.ext import commands
+from mcstatus import JavaServer
+from datetime import datetime
+import pytz
+
+SERVER_START_TIME = None
 
 load_dotenv()
 
@@ -64,11 +69,61 @@ def get_instance_status():
     )
 
 
+from datetime import datetime
+import pytz
+
+
+from datetime import datetime, timezone
+import pytz
+
 def create_status_embed(guild):
 
-    mc = guild.get_member(MC_BOT_ID)
+    mc_info = get_minecraft_info()
 
-    ec2_status = get_instance_status()
+    if mc_info["online"]:
+        player_text = (
+            f"🟢 {mc_info['players']}/{mc_info['max_players']} players"
+        )
+
+    else:
+        player_text = "🔴 Offline"
+
+
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(ist)
+
+    # ---------------- EC2 STATUS ----------------
+    instance = ec2.describe_instances(
+        InstanceIds=[INSTANCE_ID]
+    )["Reservations"][0]["Instances"][0]
+
+    ec2_state = instance["State"]["Name"]
+    launch_time = instance.get("LaunchTime")
+
+    if launch_time and ec2_state == "running":
+        launch_time = launch_time.astimezone(ist)
+        delta = now - launch_time
+
+        days = delta.days
+        hours, rem = divmod(delta.seconds, 3600)
+        minutes, _ = divmod(rem, 60)
+
+        uptime = (
+            f"{days}d {hours}h {minutes}m"
+            if days
+            else f"{hours}h {minutes}m"
+        )
+    else:
+        uptime = "N/A"
+
+    ec2_status = (
+        "🟢 Running" if ec2_state == "running"
+        else "🟡 Pending" if ec2_state in ["pending", "stopping"]
+        else "🔴 Stopped"
+    )
+
+    # ---------------- MINECRAFT STATUS ----------------
+    mc = guild.get_member(MC_BOT_ID)
 
     mc_status = (
         "🟢 Online"
@@ -76,33 +131,51 @@ def create_status_embed(guild):
         else "🔴 Offline"
     )
 
+    # ---------------- EMBED ----------------
     embed = discord.Embed(
-        title="Server Management Panel",
-        description="Manage the Minecraft server.",
-        color=discord.Color.blue()
+        title = "Minecraft Server Control Panel",
+        description=(
+            f"🖥️ **EC2 Instance**\n"
+            f"└─ {ec2_status}\n\n"
+            f"⛏️ **Minecraft Server**\n"
+            f"└─ {mc_status}\n\n"
+            f"━━━━━━━━━━━━━━\n\n"
+            f"Last Updated:\n"
+            f"{now.strftime('%Y-%m-%d %H:%M IST')}\n\n"
+            f"Uptime:\n"
+            f"{uptime}"
+        ),
+        color=discord.Color.green()
+        if ec2_state == "running"
+        else discord.Color.red(),
+        
     )
-
+    embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1020949894745296896/1518610514563829871/ouTmySN.png?ex=6a3a8bc1&is=6a393a41&hm=8da330acc56ad99f708139b93f4e62dbe9d075bbc6b5f31ffc574d39f4ee9f41&")
     embed.add_field(
-        name="EC2 Instance",
-        value=f"`{ec2_status}`",
-        inline=False
-    )
-
-    embed.add_field(
-        name="Minecraft Server",
-        value=mc_status,
-        inline=False
+        name="👥 Players",
+        value=player_text,
+        inline=True
     )
 
     return embed
 
 
 async def refresh_panel(interaction, view):
-    await interaction.message.edit(
-        embed=create_status_embed(interaction.guild),
-        view=view
-    )
 
+    channel = interaction.channel
+
+    try:
+        await interaction.message.edit(
+            embed=create_status_embed(interaction.guild),
+            view=view
+        )
+    except:
+        msg = await channel.send(
+            embed=create_status_embed(interaction.guild),
+            view=view
+        )
+
+        return msg
 
 async def start_minecraft_server(guild):
 
@@ -171,11 +244,34 @@ async def stop_minecraft_server(guild):
     return "stopped"
 
 
+def get_minecraft_info():
+
+    try:
+        server = JavaServer.lookup("13.205.205.48:31121")
+        status = server.status()
+
+        return {
+            "online": True,
+            "players": status.players.online,
+            "max_players": status.players.max,
+            "latency": round(status.latency)
+        }
+
+    except Exception:
+        return {
+            "online": False,
+            "players": 0,
+            "max_players": 0,
+            "latency": 0
+        }
 class ControlView(discord.ui.View):
 
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ======================================================
+    # START BUTTON
+    # ======================================================
     @discord.ui.button(
         label="Start Server",
         style=discord.ButtonStyle.green,
@@ -196,39 +292,36 @@ class ControlView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
 
         try:
+            result = await start_minecraft_server(interaction.guild)
 
-            result = await start_minecraft_server(
-                interaction.guild
-            )
-
+            # refresh dashboard FIRST
             await refresh_panel(interaction, self)
 
             if result == "already_running":
                 await interaction.followup.send(
-                    "✅ Minecraft server is already running.",
+                    "✅ Server is already running.",
                     ephemeral=True
                 )
 
             elif result == "online":
                 await interaction.followup.send(
-                    "🚀 Minecraft server is online.",
+                    "🚀 Server started successfully.",
                     ephemeral=True
                 )
 
             elif result == "timeout":
                 await interaction.followup.send(
-                    "⚠️ Startup command sent but online status was not detected.",
+                    "⚠️ Server started but status not confirmed.",
                     ephemeral=True
                 )
 
             else:
                 await interaction.followup.send(
-                    "🚀 Startup request sent.",
+                    "🚀 Start request sent.",
                     ephemeral=True
                 )
 
         except Exception as e:
-
             await refresh_panel(interaction, self)
 
             await interaction.followup.send(
@@ -236,6 +329,9 @@ class ControlView(discord.ui.View):
                 ephemeral=True
             )
 
+    # ======================================================
+    # STOP BUTTON
+    # ======================================================
     @discord.ui.button(
         label="Stop Server",
         style=discord.ButtonStyle.red,
@@ -256,27 +352,24 @@ class ControlView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
 
         try:
+            result = await stop_minecraft_server(interaction.guild)
 
-            result = await stop_minecraft_server(
-                interaction.guild
-            )
-
+            # refresh dashboard FIRST
             await refresh_panel(interaction, self)
 
             if result == "already_off":
                 await interaction.followup.send(
-                    "⚠️ Instance is already stopped.",
+                    "⚠️ Server is already stopped.",
                     ephemeral=True
                 )
 
             else:
                 await interaction.followup.send(
-                    "🛑 Minecraft server and EC2 instance stopped.",
+                    "🛑 Server stopped successfully.",
                     ephemeral=True
                 )
 
         except Exception as e:
-
             await refresh_panel(interaction, self)
 
             await interaction.followup.send(
@@ -284,12 +377,15 @@ class ControlView(discord.ui.View):
                 ephemeral=True
             )
 
+    # ======================================================
+    # REFRESH BUTTON
+    # ======================================================
     @discord.ui.button(
-        label="Refresh Status",
+        label="Refresh",
         style=discord.ButtonStyle.blurple,
-        custom_id="aws_status"
+        custom_id="aws_refresh"
     )
-    async def status_button(
+    async def refresh_button(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button
@@ -298,10 +394,9 @@ class ControlView(discord.ui.View):
         await refresh_panel(interaction, self)
 
         await interaction.response.send_message(
-            "🔄 Status refreshed.",
+            "🔄 Updated dashboard.",
             ephemeral=True
         )
-
 
 @client.command(name="start")
 @commands.cooldown(
