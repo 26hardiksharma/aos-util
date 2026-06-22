@@ -25,7 +25,7 @@ AUTHORIZED_USERS = [
     602330585654099969,
     657618021480660993
 ]
-
+MC_CHAT_CHANNEL = 1040949449217818727
 MC_BOT_ID = 1082588508591501343
 MC_COMMAND_CHANNEL = 1197985694128296029
 CONTROL_PANEL_CHANNEL = 1518599666734727315
@@ -196,7 +196,7 @@ async def refresh_panel(interaction, view):
     except:
         return None
 async def start_minecraft_server(guild):
-
+    log_channel = await client.fetch_channel(LOG_CHANNEL)
     mc = guild.get_member(MC_BOT_ID)
 
     if mc and str(mc.status) == "online":
@@ -209,6 +209,8 @@ async def start_minecraft_server(guild):
             InstanceIds=[INSTANCE_ID]
         )
 
+        log_channel = await client.fetch_channel(LOG_CHANNEL)
+        await log_channel.send("Instance started. Starting the minecraft server in 30 seconds.")
         await asyncio.sleep(30)
 
     ssm.send_command(
@@ -226,23 +228,24 @@ async def start_minecraft_server(guild):
 
     try:
 
-        def check(before, after):
-            return after.id == mc.id
+        def check(msg):
+            return msg.channel.id == MC_CHAT_CHANNEL and msg.author.id == MC_BOT_ID and "server has started" in msg.content.lower()
 
         await client.wait_for(
-            "presence_update",
+            "message",
             check=check,
             timeout=100
         )
-
+        await log_channel.send("Minecraft server has been started.")
         return "online"
 
     except asyncio.TimeoutError:
+        await log_channel.send("The server either failed to start in 100 seconds or is taking too long. Contact an admin or check the logs for the error.")
         return "timeout"
 
 
 async def stop_minecraft_server(guild):
-
+    log_channel = await client.fetch_channel(LOG_CHANNEL)
     if get_instance_status() != "running":
         return "already_off"
 
@@ -254,11 +257,13 @@ async def stop_minecraft_server(guild):
 
         if channel:
             await channel.send("stop")
+            await log_channel.send("Stopped the Minecraft Server. Waiting for 120 seconds before stopping the instance.")
 
         await asyncio.sleep(120)
 
     ec2.stop_instances(InstanceIds=[INSTANCE_ID])
-
+    log_channel = await client.fetch_channel(LOG_CHANNEL)
+    await log_channel.send("Instance has been stopped.")
     return "stopped"
 
 
